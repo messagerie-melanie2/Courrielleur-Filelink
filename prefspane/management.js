@@ -27,6 +27,7 @@ username.addEventListener("change", async () => {
             if (pwd) {
                 console.log("Pacome Integration: Password successfully retrieved and auto-filled.");
                 password.value = pwd;
+                updateButtons();
             } else {
                 console.log("Pacome Integration: No password found for this user.");
             }
@@ -189,8 +190,35 @@ async function loadFormData() {
 
     // [Pacome Integration] Force default server URL if not set
     if (!ncc.serverUrl) {
-        console.log("Pacome Integration: Server URL not set. Injecting default URL: https://bnum.din.gouv.fr/mdrive");
-        ncc.serverUrl = "https://bnum.din.gouv.fr/mdrive";
+        console.log("Pacome Integration: Server URL not set. Injecting default URL: https://bnum.din.gouv.fr/mdrive/");
+        ncc.serverUrl = "https://bnum.din.gouv.fr/mdrive/";
+    }
+
+    // [Pacome Integration] Auto-fill credentials for first configuration if not loaded yet
+    if ((!ncc.username || !ncc.password) && browser.pacomeLogin) {
+        try {
+            if (!ncc.username) {
+                console.log("Pacome Integration (loadFormData): Finding Pacome credentials...");
+                const creds = await browser.pacomeLogin.findCredentials();
+                if (creds) {
+                    console.log("Pacome Integration (loadFormData): Found credentials for " + creds.username);
+                    ncc.username = creds.username;
+                    ncc.password = creds.password;
+                }
+            } else if (!ncc.password) {
+                console.log("Pacome Integration (loadFormData): Fetching password for " + ncc.username);
+                const pwd = await browser.pacomeLogin.getPassword(ncc.username);
+                if (pwd) {
+                    ncc.password = pwd;
+                }
+            }
+        } catch (e) {
+            console.error("Pacome Integration (loadFormData): Failed to fetch credentials", e);
+        }
+    }
+
+    if (!ncc.storageFolder) {
+        ncc.storageFolder = "/Pièces Jointes";
     }
 
     document.querySelectorAll("input")

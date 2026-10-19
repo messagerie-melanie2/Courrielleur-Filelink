@@ -16,8 +16,8 @@ async function showFirstTimeSetupNotification() {
         const notificationId = await messenger.notifications.create({
             type: "basic",
             iconUrl: "icon48.png",
-            title: "Configuration Filelink Melanie2",
-            message: "Pour activer Filelink, ajoutez un compte Nextcloud dans les paramètres (1 clic). L'extension configurera automatiquement vos identifiants Pacome.",
+            title: "Configuration Filelink MDrive",
+            message: "Pour activer Filelink, ajoutez un compte MDrive dans les paramètres (1 clic). L'extension configurera automatiquement vos identifiants Pacome.",
             eventTime: Date.now()
         });
 
@@ -48,7 +48,7 @@ async function autoConfigureAccount(accountId) {
                 // Auto-configure with Pacome credentials and hardcoded URL
                 ncc.serverUrl = "https://bnum.din.gouv.fr/mdrive/";
                 ncc.username = creds.username;
-                // Password fetched dynamically by load() via pacomeLogin
+                ncc.password = creds.password;
                 ncc.storageFolder = "/Pièces Jointes";
                 ncc.useDlPassword = false;
                 ncc.useExpiry = false;
@@ -71,7 +71,7 @@ async function autoConfigureAccount(accountId) {
                     await messenger.notifications.create({
                         type: "basic",
                         iconUrl: "icon48.png",
-                        title: "Filelink Melanie2 configuré",
+                        title: "Filelink MDrive configuré",
                         message: `Compte configuré automatiquement pour ${creds.username}. Vous pouvez maintenant utiliser Filelink !`,
                         eventTime: Date.now()
                     });

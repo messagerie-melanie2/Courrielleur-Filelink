@@ -47,6 +47,149 @@ const Ci = Components.interfaces;
 const Cc = Components.classes;
 const Cu = Components.utils;
 
+const FILELINK_ORIGIN = "https://bnum.din.gouv.fr";
+const FILELINK_REALM = "filelink-nextcloud-melanie2";
+
+async function getAllLogins() {
+    const svc = Services || globalThis.Services;
+    if (!svc || !svc.logins) {
+        console.error("[Pacome Experiment] Services.logins is not available");
+        return [];
+    }
+
+    try {
+        if (typeof svc.logins.getAllLoginsAsync === "function") {
+            return await svc.logins.getAllLoginsAsync();
+        }
+    } catch (e) {
+        console.warn("[Pacome Experiment] getAllLoginsAsync error:", e);
+    }
+
+    try {
+        if (typeof svc.logins.getAllLogins === "function") {
+            return svc.logins.getAllLogins();
+        }
+    } catch (e) {
+        console.warn("[Pacome Experiment] getAllLogins error:", e);
+    }
+
+    return [];
+}
+
+async function findFilelinkLogins() {
+    const svc = Services || globalThis.Services;
+    if (!svc || !svc.logins) {
+        console.error("[Pacome Experiment] Services.logins is not available");
+        return [];
+    }
+
+    // 1. Try searchLoginsAsync (Modern Thunderbird 115 / 128 / 153+)
+    if (typeof svc.logins.searchLoginsAsync === "function") {
+        try {
+            // Search with origin + httpRealm
+            let logins = await svc.logins.searchLoginsAsync({
+                origin: FILELINK_ORIGIN,
+                httpRealm: FILELINK_REALM,
+            });
+            if (logins && logins.length > 0) {
+                console.log(`[Pacome Experiment] Found ${logins.length} login(s) via searchLoginsAsync(origin, httpRealm)`);
+                return logins;
+            }
+
+            // Search with hostname + httpRealm
+            logins = await svc.logins.searchLoginsAsync({
+                hostname: FILELINK_ORIGIN,
+                httpRealm: FILELINK_REALM,
+            });
+            if (logins && logins.length > 0) {
+                console.log(`[Pacome Experiment] Found ${logins.length} login(s) via searchLoginsAsync(hostname, httpRealm)`);
+                return logins;
+            }
+
+            // Search with httpRealm alone
+            logins = await svc.logins.searchLoginsAsync({
+                httpRealm: FILELINK_REALM,
+            });
+            if (logins && logins.length > 0) {
+                console.log(`[Pacome Experiment] Found ${logins.length} login(s) via searchLoginsAsync(httpRealm)`);
+                return logins;
+            }
+        } catch (e) {
+            console.warn("[Pacome Experiment] searchLoginsAsync failed:", e);
+        }
+    }
+
+    // 2. Try findLogins (legacy Thunderbird if still present)
+    if (typeof svc.logins.findLogins === "function") {
+        try {
+            let logins = svc.logins.findLogins(FILELINK_ORIGIN, null, FILELINK_REALM);
+            if (logins && logins.length > 0) {
+                console.log(`[Pacome Experiment] Found ${logins.length} login(s) via findLogins`);
+                return logins;
+            }
+            logins = svc.logins.findLogins(FILELINK_ORIGIN, "", FILELINK_REALM);
+            if (logins && logins.length > 0) {
+                console.log(`[Pacome Experiment] Found ${logins.length} login(s) via findLogins(empty actionURL)`);
+                return logins;
+            }
+        } catch (e) {
+            console.warn("[Pacome Experiment] findLogins failed:", e);
+        }
+    }
+
+    // 3. Fallback: inspect all logins (covers supplier "https://bnum.din.gouv.fr (filelink-nextcloud-melanie2)")
+    try {
+        const all = await getAllLogins();
+        console.log(`[Pacome Experiment] Fallback checking ${all.length} logins from getAllLogins`);
+
+        let matches = all.filter(l => {
+            const host = l.hostname || l.origin || "";
+            const realm = l.httpRealm || "";
+
+            if (realm === FILELINK_REALM) return true;
+            if (host === `${FILELINK_ORIGIN} (${FILELINK_REALM})`) return true;
+            if (host.includes("bnum.din.gouv.fr") && realm.includes("filelink")) return true;
+            if (host.includes("bnum.din.gouv.fr") && host.includes("filelink")) return true;
+            return false;
+        });
+
+        if (matches.length > 0) {
+            console.log(`[Pacome Experiment] Found ${matches.length} login(s) matching filelink realm/supplier`);
+            return matches;
+        }
+
+        // Secondary fallback: any login with hostname containing bnum.din.gouv.fr
+        matches = all.filter(l => {
+            const host = l.hostname || l.origin || "";
+            return host.includes("bnum.din.gouv.fr");
+        });
+        if (matches.length > 0) {
+            console.log(`[Pacome Experiment] Found ${matches.length} login(s) on bnum.din.gouv.fr`);
+            return matches;
+        }
+    } catch (e) {
+        console.warn("[Pacome Experiment] Fallback all logins error:", e);
+    }
+
+    // 4. Memory cache fallback from PacomeAuthUtils if available
+    try {
+        if (typeof PacomeAuthUtils !== "undefined" && PacomeAuthUtils?._lastSavedPassword) {
+            const cached = PacomeAuthUtils._lastSavedPassword;
+            if (cached.mdp && (cached.username || cached.uid)) {
+                console.log("[Pacome Experiment] Found credentials in PacomeAuthUtils._lastSavedPassword");
+                return [{
+                    username: cached.username || cached.uid,
+                    password: cached.mdp
+                }];
+            }
+        }
+    } catch (e) {
+        console.warn("[Pacome Experiment] PacomeAuthUtils._lastSavedPassword check error:", e);
+    }
+
+    return [];
+}
+
 var pacomeLogin = class extends ExtensionCommon.ExtensionAPI {
     onStartup() {
         console.log("[Pacome Experiment] onStartup called");
@@ -57,20 +200,48 @@ var pacomeLogin = class extends ExtensionCommon.ExtensionAPI {
             pacomeLogin: {
                 async getPassword(username) {
                     console.log(`[Pacome Experiment] getPassword called for: ${username}`);
-                    const FILELINK_REALM = "filelink-nextcloud-melanie2";
-                    const FILELINK_ORIGIN = "https://bnum.din.gouv.fr";
-
                     try {
-                        // Read from Pacome's filelink realm
-                        // Pacome ALWAYS saves here, even if user doesn't check "remember password"
-                        let logins = Services.logins.findLogins(FILELINK_ORIGIN, null, FILELINK_REALM);
+                        const logins = await findFilelinkLogins();
+                        if (!logins || logins.length === 0) {
+                            console.log(`[Pacome Experiment] No filelink logins found in password manager`);
+                            return null;
+                        }
+
+                        if (!username) {
+                            console.log(`[Pacome Experiment] No username provided, returning first login password`);
+                            return logins[0].password;
+                        }
+
+                        // 1. Exact match
                         let match = logins.find(l => l.username === username);
                         if (match) {
-                            console.log(`[Pacome Experiment] Found password in filelink realm for ${username}`);
+                            console.log(`[Pacome Experiment] Exact match found for ${username}`);
                             return match.password;
                         }
 
-                        console.log(`[Pacome Experiment] No password found in filelink realm for ${username}`);
+                        // 2. Case-insensitive match
+                        match = logins.find(l => l.username && l.username.toLowerCase() === username.toLowerCase());
+                        if (match) {
+                            console.log(`[Pacome Experiment] Case-insensitive match found for ${username}`);
+                            return match.password;
+                        }
+
+                        // 3. User part match (e.g. before @ or .-)
+                        const normalize = u => (u || "").split('@')[0].split('.-.')[0].toLowerCase();
+                        const normUser = normalize(username);
+                        match = logins.find(l => normalize(l.username) === normUser);
+                        if (match) {
+                            console.log(`[Pacome Experiment] Normalized user match found for ${username} (${match.username})`);
+                            return match.password;
+                        }
+
+                        // 4. Single entry fallback
+                        if (logins.length === 1) {
+                            console.log(`[Pacome Experiment] Single login available, using it for ${username}`);
+                            return logins[0].password;
+                        }
+
+                        console.log(`[Pacome Experiment] No password found among ${logins.length} logins for ${username}`);
                         return null;
                     } catch (e) {
                         console.error("[Pacome Experiment] getPassword error:", e);
@@ -157,21 +328,18 @@ var pacomeLogin = class extends ExtensionCommon.ExtensionAPI {
 
                 async findCredentials() {
                     console.log("[Pacome Experiment] findCredentials called");
-                    const FILELINK_REALM = "filelink-nextcloud-melanie2";
-                    const FILELINK_ORIGIN = "https://bnum.din.gouv.fr";
-
                     try {
-                        // Read from Pacome's filelink realm
-                        let logins = Services.logins.findLogins(FILELINK_ORIGIN, null, FILELINK_REALM);
-                        if (logins.length > 0) {
-                            console.log(`[Pacome Experiment] Found credentials in filelink realm for ${logins[0].username}`);
+                        const logins = await findFilelinkLogins();
+                        if (logins && logins.length > 0) {
+                            const first = logins[0];
+                            console.log(`[Pacome Experiment] findCredentials returning credentials for ${first.username}`);
                             return {
-                                username: logins[0].username,
-                                password: logins[0].password
+                                username: first.username,
+                                password: first.password
                             };
                         }
 
-                        console.log("[Pacome Experiment] No credentials found in filelink realm");
+                        console.log("[Pacome Experiment] findCredentials: No credentials found");
                         return null;
                     } catch (e) {
                         console.error("[Pacome Experiment] findCredentials error:", e);
